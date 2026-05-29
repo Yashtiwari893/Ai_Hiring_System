@@ -16,9 +16,42 @@ type RequestBody = {
   resume_url: string
 }
 
+function normalizeResumeUrl(url: string): string {
+  try {
+    const parsed = new URL(url)
+    if (parsed.hostname.includes('drive.google.com')) {
+      const fileId = parsed.searchParams.get('id')
+      if (fileId) {
+        return `https://drive.google.com/uc?export=download&id=${fileId}`
+      }
+      const match = parsed.pathname.match(/\/file\/d\/([^\/]+)/)
+      if (match) {
+        return `https://drive.google.com/uc?export=download&id=${match[1]}`
+      }
+    }
+  } catch {
+    // ignore invalid URL and use original value
+  }
+  return url
+}
+
 async function fetchPdfBuffer(url: string): Promise<ArrayBuffer> {
-  const res = await fetch(url)
-  if (!res.ok) throw new Error(`Failed to fetch PDF: ${res.status} ${res.statusText}`)
+  const normalizedUrl = normalizeResumeUrl(url)
+  const res = await fetch(normalizedUrl, {
+    headers: {
+      Accept: 'application/pdf,*/*;q=0.9',
+    },
+  })
+  if (!res.ok) {
+    throw new Error(`Failed to fetch PDF: ${res.status} ${res.statusText} from ${normalizedUrl}`)
+  }
+
+  const contentType = res.headers.get('content-type') || ''
+  if (!contentType.includes('pdf')) {
+    const bodyText = await res.text().catch(() => '')
+    throw new Error(`Expected PDF, got ${contentType}. Response body snippet: ${bodyText.slice(0, 200)}`)
+  }
+
   return await res.arrayBuffer()
 }
 
