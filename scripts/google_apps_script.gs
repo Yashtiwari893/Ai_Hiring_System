@@ -5,7 +5,7 @@
  *  - Install an onFormSubmit trigger for `onFormSubmit` (see createOnFormSubmitTrigger)
  */
 
-const API_ENDPOINT = 'https://ai-hiring-system-chi.vercel.app/api/candidate' // <-- set this
+const API_ENDPOINT = 'https://ai-hiring-system-chi.vercel.app/api/process-application' // <-- set this
 const FORM_ID = '11Hlobrhbs8igpsu3B8ZvJ84ikLlHn-9zgLbZirHd4kU' // optional, used by createOnFormSubmitTrigger
 
 function onFormSubmit(e) {
