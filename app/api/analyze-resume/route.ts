@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server'
-import { analyzeResumeWithGemini, type ResumeAnalysis } from '../../../lib/ai/resumeAnalysis'
+import { analyzeResume, type ResumeAnalysis } from '../../../lib/ai/resumeAnalysis'
 import { addCandidateAnalysis } from '../../../lib/db/helpers'
 
 type AnalyzeResumeRequest = {
@@ -25,7 +25,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: 'Missing resume_text' }, { status: 400 })
     }
 
-    const analysis: ResumeAnalysis = await analyzeResumeWithGemini(body.resume_text)
+    const analysis: ResumeAnalysis = await analyzeResume(body.resume_text)
 
     const candidateAnalysisRecord: any = {
       skills: analysis.skills,

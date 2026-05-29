@@ -24,7 +24,8 @@ async function fetchPdfBuffer(url: string): Promise<ArrayBuffer> {
 
 async function extractTextFromPdf(buffer: ArrayBuffer): Promise<string> {
   // Use pdf-parse for server-side PDF text extraction
-  const pdfParse = (await import('pdf-parse')).default
+  const pdfParseModule = await import('pdf-parse')
+  const pdfParse = (pdfParseModule as any).default || pdfParseModule
   const data = await pdfParse(Buffer.from(buffer))
   return data.text || ''
 }
