@@ -9,6 +9,8 @@ type CandidatePayload = {
   city?: string
   college?: string
   role?: string
+  role_applied?: string
+  position?: string
   resume_url?: string
 }
 
@@ -39,7 +41,7 @@ export async function POST(req: NextRequest) {
       phone: body.phone || null,
       city: body.city || null,
       college: body.college || null,
-      role: body.role || null,
+      role_applied: body.role || body.role_applied || body.position || null,
       resume_url: body.resume_url,
     }
 

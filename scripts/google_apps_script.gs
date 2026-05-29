@@ -5,29 +5,27 @@
  *  - Install an onFormSubmit trigger for `onFormSubmit` (see createOnFormSubmitTrigger)
  */
 
-const API_ENDPOINT = 'https://your-nextjs-site.com/api/candidate' // <-- set this
-const FORM_ID = 'YOUR_GOOGLE_FORM_ID' // optional, used by createOnFormSubmitTrigger
+const API_ENDPOINT = 'https://ai-hiring-system-chi.vercel.app/api/candidate' // <-- set this
+const FORM_ID = '11Hlobrhbs8igpsu3B8ZvJ84ikLlHn-9zgLbZirHd4kU' // optional, used by createOnFormSubmitTrigger
 
 function onFormSubmit(e) {
   try {
-    // e.namedValues is a map of question -> [answers]
     const nv = e.namedValues || {}
+    Logger.log('namedValues keys: ' + Object.keys(nv).join(', '))
+    Logger.log('namedValues raw: ' + JSON.stringify(nv))
 
-    // Adjust keys to match your form question titles
-    const name = (nv['Name'] || nv['Full Name'] || [''])[0]
-    const email = (nv['Email'] || [''])[0]
-    const phone = (nv['Phone'] || nv['Phone Number'] || [''])[0]
-    const city = (nv['City'] || [''])[0]
-    const college = (nv['College'] || [''])[0]
-    const role = (nv['Role Applied'] || nv['Role Applied For'] || [''])[0]
+    const normalized = {}
+    Object.keys(nv).forEach((key) => {
+      normalized[key.trim().toLowerCase()] = nv[key] && nv[key].length ? nv[key][0] : ''
+    })
 
-    // File upload responses normally provide a Drive URL in the cell value
-    let resumeUrl = ''
-    if (nv['Resume'] && nv['Resume'].length) {
-      resumeUrl = nv['Resume'][0]
-    } else if (nv['Resume Upload'] && nv['Resume Upload'].length) {
-      resumeUrl = nv['Resume Upload'][0]
-    }
+    const name = normalized['name'] || ''
+    const email = normalized['email'] || ''
+    const phone = normalized['phone number'] || normalized['phone'] || ''
+    const city = normalized['city'] || ''
+    const college = normalized['college/university'] || normalized['college'] || ''
+    const role = normalized['position applied for'] || normalized['role applied for'] || normalized['role'] || ''
+    const resumeUrl = normalized['resume or cv'] || normalized['resume'] || ''
 
     const payload = {
       name,
@@ -35,9 +33,11 @@ function onFormSubmit(e) {
       phone,
       city,
       college,
-      role,
+      role_applied: role,
       resume_url: resumeUrl,
     }
+
+    Logger.log('Final payload: ' + JSON.stringify(payload))
 
     const options = {
       method: 'post',
@@ -48,9 +48,7 @@ function onFormSubmit(e) {
 
     const resp = UrlFetchApp.fetch(API_ENDPOINT, options)
     Logger.log('Posted to API: %s -> %s', API_ENDPOINT, resp.getResponseCode())
-    if (resp.getResponseCode() >= 400) {
-      Logger.log('API response: %s', resp.getContentText())
-    }
+    Logger.log('API response body: %s', resp.getContentText())
   } catch (err) {
     Logger.log('Error in onFormSubmit: ' + err)
   }
