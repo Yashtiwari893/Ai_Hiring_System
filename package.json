@@ -1,0 +1,32 @@
+{
+  "name": "ai-hiring-system",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.24.1",
+    "@supabase/supabase-js": "^2.45.0",
+    "dotenv": "^16.4.5",
+    "googleapis": "^144.0.0",
+    "groq-sdk": "^0.7.0",
+    "next": "^14.2.5",
+    "pdf-parse": "^1.1.1",
+    "pdfjs-dist": "^4.4.168",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "resend": "^3.5.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.0.0",
+    "@types/node": "^20.14.4",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "autoprefixer": "^10.4.19",
+    "postcss": "^8.4.39",
+    "tailwindcss": "^3.4.6",
+    "typescript": "^5.5.3"
+  }
+}
