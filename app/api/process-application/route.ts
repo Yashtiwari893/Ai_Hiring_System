@@ -100,16 +100,43 @@ export async function POST(req: NextRequest) {
       return new Response(JSON.stringify({ error: 'Missing required fields' }), { status: 400 })
     }
 
-    // Insert initial candidate record
+    // Insert initial candidate record, or reuse existing candidate if email already exists
+    let candidateId: string | null = null
+
     const { data: initialData, error: initErr } = await getSupabase()
       .from('candidates')
       .insert([{ name, email, phone, city, college, role_applied, resume_url, status: 'Processing' }])
       .select()
       .single()
 
-    const candidateId = initialData?.id
-    if (initErr || !candidateId) {
-      console.error('Failed to create initial candidate record', initErr)
+    if (initErr) {
+      if (initErr.code === '23505') {
+        const { data: existingCandidate, error: findErr } = await getSupabase()
+          .from('candidates')
+          .select('id')
+          .eq('email', email)
+          .single()
+
+        if (findErr || !existingCandidate?.id) {
+          console.error('Duplicate email found but could not retrieve existing candidate', findErr, initErr)
+          return new Response(JSON.stringify({ error: 'Failed to create candidate record' }), { status: 500 })
+        }
+
+        candidateId = existingCandidate.id
+        await getSupabase()
+          .from('candidates')
+          .update({ phone, city, college, role_applied, resume_url, status: 'Processing' })
+          .eq('id', candidateId)
+      } else {
+        console.error('Failed to create initial candidate record', initErr)
+        return new Response(JSON.stringify({ error: 'Failed to create candidate record' }), { status: 500 })
+      }
+    } else {
+      candidateId = initialData?.id ?? null
+    }
+
+    if (!candidateId) {
+      console.error('Candidate ID missing after insert or lookup')
       return new Response(JSON.stringify({ error: 'Failed to create candidate record' }), { status: 500 })
     }
 
