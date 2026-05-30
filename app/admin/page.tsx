@@ -4,6 +4,9 @@ import TopCandidatesPanel from './TopCandidatesPanel'
 import { fetchCandidates, getCandidateCounts, getRecruiterAnalytics, getTopCandidates } from '@/lib/db/helpers'
 import type { CandidateCounts } from '@/lib/db/types'
 
+export const dynamic = 'force-dynamic'  // har request pe fresh data fetch karo
+export const revalidate = 0             // c
+
 const PAGE_SIZE = 10
 
 export default async function Page() {
