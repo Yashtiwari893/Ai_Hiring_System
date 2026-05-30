@@ -24,7 +24,7 @@ export type CandidateScore = {
 }
 
 const GROQ_API_KEY = process.env.GROQ_API_KEY
-const GROQ_MODEL = process.env.GROQ_MODEL || 'llama3-8b-8192'
+const GROQ_MODEL = process.env.GROQ_MODEL || 'llama3-8b'
 const MAX_RETRIES = Number(process.env.GROQ_RETRY_ATTEMPTS ?? 3)
 const BASE_RETRY_DELAY_MS = Number(process.env.GROQ_RETRY_BASE_DELAY_MS ?? 500)
 const DEFAULT_TIMEOUT_MS = Number(process.env.LLM_TIMEOUT_MS ?? 30000)

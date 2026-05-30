@@ -185,9 +185,11 @@ If a value is unknown, return empty array, empty string, or 0. No markdown, no e
 
     let message: any
     try {
+      const groqModel = process.env.GROQ_MODEL || 'llama3-8b'
+      console.log(`Using Groq model for resume parsing: ${groqModel}`)
       message = await runWithTimeout(
         getGroqClient().chat.completions.create({
-          model: process.env.GROQ_MODEL || 'llama3-8b-8192',
+          model: groqModel,
           messages: [
             { role: 'system', content: systemPrompt },
             { role: 'user', content: `Resume:\n\n${trimmedResumeText}` },
