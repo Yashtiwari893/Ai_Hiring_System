@@ -13,7 +13,9 @@ type RequestBody = {
   city?: string
   college?: string
   role_applied: string
-  resume_url: string
+  resume_url?: string
+  resume_base64?: string
+  resume_filename?: string
 }
 
 function normalizeResumeUrl(url: string): string {
@@ -94,9 +96,9 @@ async function runWithTimeout<T>(promise: Promise<T>, ms: number, label = 'opera
 export async function POST(req: NextRequest) {
   try {
     const body: RequestBody = await req.json()
-    const { name, email, phone, city, college, role_applied, resume_url } = body
+    const { name, email, phone, city, college, role_applied, resume_url, resume_base64, resume_filename } = body
 
-    if (!name || !email || !role_applied || !resume_url) {
+    if (!name || !email || !role_applied || (!resume_url && !resume_base64)) {
       return new Response(JSON.stringify({ error: 'Missing required fields' }), { status: 400 })
     }
 
@@ -140,10 +142,15 @@ export async function POST(req: NextRequest) {
       return new Response(JSON.stringify({ error: 'Failed to create candidate record' }), { status: 500 })
     }
 
-    // Step 1: Fetch PDF and extract text
+    // Step 1: Fetch or decode the resume file and extract text
     let pdfBuffer: ArrayBuffer
     try {
-      pdfBuffer = await fetchPdfBuffer(resume_url)
+      if (resume_base64) {
+        const fileBuffer = Buffer.from(resume_base64, 'base64')
+        pdfBuffer = fileBuffer.buffer.slice(fileBuffer.byteOffset, fileBuffer.byteOffset + fileBuffer.byteLength)
+      } else {
+        pdfBuffer = await fetchPdfBuffer(resume_url!)
+      }
     } catch (err: any) {
       await getSupabase().from('candidates').update({ status: 'Pending', error_step: 'Fetch PDF', error_message: String(err?.message || err) }).eq('id', candidateId)
       return new Response(JSON.stringify({ error: 'Failed to fetch PDF' }), { status: 500 })

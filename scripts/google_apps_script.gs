@@ -8,6 +8,31 @@
 const API_ENDPOINT = 'https://ai-hiring-system-chi.vercel.app/api/process-application' // <-- set this
 const FORM_ID = '11Hlobrhbs8igpsu3B8ZvJ84ikLlHn-9zgLbZirHd4kU' // optional, used by createOnFormSubmitTrigger
 
+function getDriveFileId(url) {
+  if (!url) return null
+  try {
+    const parsed = new URL(url)
+    if (parsed.hostname.includes('drive.google.com')) {
+      const idFromParam = parsed.searchParams.get('id')
+      if (idFromParam) return idFromParam
+      const match = parsed.pathname.match(/\/file\/d\/([^\/]+)/)
+      if (match) return match[1]
+    }
+  } catch (err) {
+    return null
+  }
+  return null
+}
+
+function getDriveFileBase64(fileId) {
+  const file = DriveApp.getFileById(fileId)
+  const blob = file.getBlob()
+  return {
+    resume_base64: Utilities.base64Encode(blob.getBytes()),
+    resume_filename: file.getName(),
+  }
+}
+
 function onFormSubmit(e) {
   try {
     const nv = e.namedValues || {}
@@ -27,6 +52,20 @@ function onFormSubmit(e) {
     const role = normalized['position applied for'] || normalized['role applied for'] || normalized['role'] || ''
     const resumeUrl = normalized['resume or cv'] || normalized['resume'] || ''
 
+    let resume_base64 = ''
+    let resume_filename = ''
+    const driveId = getDriveFileId(resumeUrl)
+    if (driveId) {
+      try {
+        const driveFile = getDriveFileBase64(driveId)
+        resume_base64 = driveFile.resume_base64
+        resume_filename = driveFile.resume_filename
+        Logger.log('Loaded Drive file content for upload: ' + resume_filename)
+      } catch (error) {
+        Logger.log('Failed to load Drive file content: ' + error)
+      }
+    }
+
     const payload = {
       name,
       email,
@@ -35,9 +74,14 @@ function onFormSubmit(e) {
       college,
       role_applied: role,
       resume_url: resumeUrl,
+      resume_base64,
+      resume_filename,
     }
 
-    Logger.log('Final payload: ' + JSON.stringify(payload))
+    Logger.log('Final payload: ' + JSON.stringify({
+      ...payload,
+      resume_base64: resume_base64 ? '[BASE64]' : '',
+    }))
 
     const options = {
       method: 'post',
