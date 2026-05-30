@@ -55,6 +55,7 @@ function onFormSubmit(e) {
     let resume_base64 = ''
     let resume_filename = ''
     const driveId = getDriveFileId(resumeUrl)
+    Logger.log('Resolved Drive ID: ' + driveId)
     if (driveId) {
       try {
         const driveFile = getDriveFileBase64(driveId)
@@ -63,7 +64,11 @@ function onFormSubmit(e) {
         Logger.log('Loaded Drive file content for upload: ' + resume_filename)
       } catch (error) {
         Logger.log('Failed to load Drive file content: ' + error)
+        if (error && error.message) Logger.log('Drive error message: ' + error.message)
+        if (error && error.stack) Logger.log('Drive error stack: ' + error.stack)
       }
+    } else {
+      Logger.log('No Drive ID could be parsed from resume URL')
     }
 
     const payload = {
@@ -104,4 +109,13 @@ function createOnFormSubmitTrigger() {
   const form = FormApp.openById(FORM_ID)
   ScriptApp.newTrigger('onFormSubmit').forForm(form).onFormSubmit().create()
   Logger.log('Trigger created for form: ' + FORM_ID)
+}
+
+function authorizeDriveAccess() {
+  try {
+    const root = DriveApp.getRootFolder()
+    Logger.log('Drive authorized. Root folder: ' + root.getName())
+  } catch (err) {
+    Logger.log('Drive authorization failed: ' + err)
+  }
 }

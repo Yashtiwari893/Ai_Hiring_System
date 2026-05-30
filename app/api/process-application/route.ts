@@ -20,6 +20,7 @@ type RequestBody = {
 
 function normalizeResumeUrl(url: string): string {
   try {
+    // Use WHATWG URL API (fixes DEP0169 warning)
     const parsed = new URL(url)
     if (parsed.hostname.includes('drive.google.com')) {
       const fileId = parsed.searchParams.get('id')
@@ -37,31 +38,28 @@ function normalizeResumeUrl(url: string): string {
   return url
 }
 
-async function fetchPdfBuffer(url: string): Promise<ArrayBuffer> {
+async function fetchPdfBuffer(url: string): Promise<Buffer> {
   const normalizedUrl = normalizeResumeUrl(url)
   const res = await fetch(normalizedUrl, {
-    headers: {
-      Accept: 'application/pdf,*/*;q=0.9',
-    },
+    headers: { Accept: 'application/pdf,*/*;q=0.9' },
   })
   if (!res.ok) {
     throw new Error(`Failed to fetch PDF: ${res.status} ${res.statusText} from ${normalizedUrl}`)
   }
-
   const contentType = res.headers.get('content-type') || ''
   if (!contentType.includes('pdf')) {
     const bodyText = await res.text().catch(() => '')
-    throw new Error(`Expected PDF, got ${contentType}. Response body snippet: ${bodyText.slice(0, 200)}`)
+    throw new Error(`Expected PDF, got ${contentType}. Body: ${bodyText.slice(0, 200)}`)
   }
-
-  return await res.arrayBuffer()
+  const arrayBuffer = await res.arrayBuffer()
+  // Use Buffer.from() instead of deprecated Buffer() constructor (fixes DEP0005)
+  return Buffer.from(arrayBuffer)
 }
 
-async function extractTextFromPdf(buffer: ArrayBuffer): Promise<string> {
-  // Use pdf-parse for server-side PDF text extraction
-  const pdfParseModule = await import('pdf-parse')
+async function extractTextFromPdf(buf: Buffer): Promise<string> {
+  const pdfParseModule = await import('pdf-parse/lib/pdf-parse.js')
   const pdfParse = (pdfParseModule as any).default || pdfParseModule
-  const data = await pdfParse(Buffer.from(buffer))
+  const data = await pdfParse(buf)
   return data.text || ''
 }
 
@@ -79,7 +77,7 @@ function getSupabase() {
   return createClient(supabaseUrl, supabaseKey)
 }
 
-const LLM_TIMEOUT_MS = Number(process.env.LLM_TIMEOUT_MS || 30000)
+const LLM_TIMEOUT_MS = Number(process.env.LLM_TIMEOUT_MS || 45000)
 
 async function runWithTimeout<T>(promise: Promise<T>, ms: number, label = 'operation'): Promise<T> {
   let timer: ReturnType<typeof setTimeout>
@@ -102,7 +100,7 @@ export async function POST(req: NextRequest) {
       return new Response(JSON.stringify({ error: 'Missing required fields' }), { status: 400 })
     }
 
-    // Insert initial candidate record, or reuse existing candidate if email already exists
+    // Insert initial candidate record
     let candidateId: string | null = null
 
     const { data: initialData, error: initErr } = await getSupabase()
@@ -120,7 +118,7 @@ export async function POST(req: NextRequest) {
           .single()
 
         if (findErr || !existingCandidate?.id) {
-          console.error('Duplicate email found but could not retrieve existing candidate', findErr, initErr)
+          console.error('Duplicate email but could not retrieve existing candidate', findErr, initErr)
           return new Response(JSON.stringify({ error: 'Failed to create candidate record' }), { status: 500 })
         }
 
@@ -138,33 +136,39 @@ export async function POST(req: NextRequest) {
     }
 
     if (!candidateId) {
-      console.error('Candidate ID missing after insert or lookup')
       return new Response(JSON.stringify({ error: 'Failed to create candidate record' }), { status: 500 })
     }
 
-    // Step 1: Fetch or decode the resume file and extract text
-    let pdfBuffer: ArrayBuffer
+    // Step 1: Decode or fetch resume → Buffer
+    let pdfBuffer: Buffer
     try {
       if (resume_base64) {
-        const fileBuffer = Buffer.from(resume_base64, 'base64')
-        pdfBuffer = fileBuffer.buffer.slice(fileBuffer.byteOffset, fileBuffer.byteOffset + fileBuffer.byteLength)
+        // FIX: Use Buffer.from() directly — clean and no deprecated constructor
+        pdfBuffer = Buffer.from(resume_base64, 'base64')
+        console.log(`Decoded base64 resume: ${pdfBuffer.length} bytes`)
       } else {
         pdfBuffer = await fetchPdfBuffer(resume_url!)
+        console.log(`Fetched PDF from URL: ${pdfBuffer.length} bytes`)
       }
     } catch (err: any) {
       await getSupabase().from('candidates').update({ status: 'Pending', error_step: 'Fetch PDF', error_message: String(err?.message || err) }).eq('id', candidateId)
       return new Response(JSON.stringify({ error: 'Failed to fetch PDF' }), { status: 500 })
     }
 
+    // Step 2: Extract text from PDF
     let resumeText: string
     try {
       resumeText = await extractTextFromPdf(pdfBuffer)
+      console.log(`Extracted resume text: ${resumeText.length} chars`)
+      if (!resumeText || resumeText.trim().length < 50) {
+        throw new Error('Extracted text is too short — PDF may be image-based or corrupted')
+      }
     } catch (err: any) {
       await getSupabase().from('candidates').update({ status: 'Pending', error_step: 'PDF Extraction', error_message: String(err?.message || err) }).eq('id', candidateId)
       return new Response(JSON.stringify({ error: 'Failed to extract PDF text' }), { status: 500 })
     }
 
-    // Step 2: Parse resume with Groq
+    // Step 3: Parse resume with Groq
     const systemPrompt = `You are a strict JSON generator. Given a resume text, output ONLY one valid JSON object with these exact keys:
 - "skills": array of strings
 - "experience_years": number
@@ -176,6 +180,9 @@ export async function POST(req: NextRequest) {
 - "summary": brief two-sentence candidate summary
 If a value is unknown, return empty array, empty string, or 0. No markdown, no explanation, no extra keys.`
 
+    // Trim resume text to avoid token limit issues
+    const trimmedResumeText = resumeText.slice(0, 6000)
+
     let message: any
     try {
       message = await runWithTimeout(
@@ -183,7 +190,7 @@ If a value is unknown, return empty array, empty string, or 0. No markdown, no e
           model: process.env.GROQ_MODEL || 'llama3-8b-8192',
           messages: [
             { role: 'system', content: systemPrompt },
-            { role: 'user', content: `Resume:\n\n${resumeText}` },
+            { role: 'user', content: `Resume:\n\n${trimmedResumeText}` },
           ],
           max_tokens: 1024,
           temperature: 0.0,
@@ -192,11 +199,14 @@ If a value is unknown, return empty array, empty string, or 0. No markdown, no e
         'Groq Parsing'
       )
     } catch (err: any) {
+      console.error('Groq error:', err?.message || err)
       await getSupabase().from('candidates').update({ status: 'Pending', error_step: 'Groq Parsing', error_message: String(err?.message || err) }).eq('id', candidateId)
       return new Response(JSON.stringify({ error: 'Failed at Groq Parsing' }), { status: 500 })
     }
 
     const rawGroq = message?.choices?.[0]?.message?.content || ''
+    console.log('Groq raw response:', rawGroq.slice(0, 300))
+
     let parsed: any = null
     try {
       const clean = rawGroq.replace(/```json|```/g, '').trim()
@@ -209,11 +219,12 @@ If a value is unknown, return empty array, empty string, or 0. No markdown, no e
       return new Response(JSON.stringify({ error: 'Failed to parse Groq JSON response' }), { status: 500 })
     }
 
-    // Step 3: Score with Gemini
+    // Step 4: Score with Gemini
     let geminiResult: any
     try {
       geminiResult = await runWithTimeout(evaluateCandidateWithGemini(parsed, role_applied), LLM_TIMEOUT_MS, 'Gemini Evaluation')
     } catch (err: any) {
+      console.error('Gemini error:', err?.message || err)
       await getSupabase().from('candidates').update({ status: 'Pending', error_step: 'Gemini Evaluation', error_message: String(err?.message || err) }).eq('id', candidateId)
       return new Response(JSON.stringify({ error: 'Failed at Gemini Evaluation' }), { status: 500 })
     }
@@ -243,7 +254,7 @@ If a value is unknown, return empty array, empty string, or 0. No markdown, no e
       return new Response(JSON.stringify({ error: 'Failed to update candidate' }), { status: 500 })
     }
 
-    // Step 4: Sync to Google Sheets (optional)
+    // Step 5: Sync to Google Sheets (optional)
     let sheetSynced = false
     try {
       await appendCandidateRow({
@@ -258,7 +269,7 @@ If a value is unknown, return empty array, empty string, or 0. No markdown, no e
       await getSupabase().from('candidates').update({ sheet_sync_error: String(err?.message || err) }).eq('id', candidateId)
     }
 
-    // Step 5: Send email (shortlisted or rejected)
+    // Step 6: Send email (shortlisted or rejected)
     let emailSent = false
     if (status === 'Shortlisted' || status === 'Rejected') {
       try {
