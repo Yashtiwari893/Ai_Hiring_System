@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { addCandidateAnalysis } from '../../../lib/db/helpers'
-import { scoreCandidateWithGroq, type CandidateProfile } from '../../../lib/ai/scoreCandidate'
+import { scoreCandidateWithGemini, type CandidateProfile } from '../../../lib/ai/scoreCandidate'
 
 type ScoreCandidateRequest = {
   candidate_profile: CandidateProfile
@@ -50,7 +50,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: 'required_skills must be a non-empty array of strings' }, { status: 400 })
     }
 
-    const scoreResult = await scoreCandidateWithGroq(body.candidate_profile, requiredSkills)
+    const scoreResult = await scoreCandidateWithGemini(body.candidate_profile, requiredSkills)
     const normalizedProfile = normalizeCandidateProfile(body.candidate_profile)
 
     const analysisPayload: any = {

@@ -1,4 +1,4 @@
-import Groq from 'groq-sdk'
+import { evaluateCandidateWithGemini } from './gemini'
 
 export type CandidateProfile = {
   name?: string
@@ -21,47 +21,6 @@ export type CandidateScore = {
   status: 'Shortlisted' | 'Manual Review' | 'Rejected'
   reason: string
   missing_skills: string[]
-}
-
-const GROQ_API_KEY = process.env.GROQ_API_KEY
-const GROQ_MODEL = process.env.GROQ_MODEL || 'llama3-8b'
-const MAX_RETRIES = Number(process.env.GROQ_RETRY_ATTEMPTS ?? 3)
-const BASE_RETRY_DELAY_MS = Number(process.env.GROQ_RETRY_BASE_DELAY_MS ?? 500)
-const DEFAULT_TIMEOUT_MS = Number(process.env.LLM_TIMEOUT_MS ?? 30000)
-
-if (!GROQ_API_KEY) {
-  throw new Error('GROQ_API_KEY must be configured for candidate scoring')
-}
-
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms))
-}
-
-function getGroqClient() {
-  return new Groq({ apiKey: GROQ_API_KEY })
-}
-
-function extractRawText(response: any): string {
-  if (!response) return ''
-  if (typeof response?.text === 'string') return response.text
-  if (typeof response?.outputText === 'string') return response.outputText
-  if (Array.isArray(response?.content)) {
-    return response.content.map((item: any) => String(item?.text || item?.content || '')).join('\n')
-  }
-  if (typeof response?.response?.text === 'function') {
-    return String(response.response.text())
-  }
-  return JSON.stringify(response)
-}
-
-function extractJson(raw: string): string {
-  const trimmed = raw.trim()
-  const first = trimmed.indexOf('{')
-  const last = trimmed.lastIndexOf('}')
-  if (first !== -1 && last !== -1 && last > first) {
-    return trimmed.substring(first, last + 1)
-  }
-  return trimmed
 }
 
 function normalizeStringArray(value: unknown): string[] {
@@ -103,42 +62,7 @@ function normalizeStatus(value: unknown, score: number): CandidateScore['status'
   return 'Rejected'
 }
 
-function normalizeReason(value: unknown): string {
-  if (typeof value === 'string') {
-    return value.trim()
-  }
-  return ''
-}
-
-async function runWithTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
-  let timer: NodeJS.Timeout
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`Groq scoring request timed out after ${timeoutMs}ms`)), timeoutMs)
-  })
-
-  try {
-    return await Promise.race([promise, timeoutPromise])
-  } finally {
-    clearTimeout(timer!)
-  }
-}
-
-async function retry<T>(fn: () => Promise<T>, attempts: number): Promise<T> {
-  let lastError: unknown
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
-    try {
-      return await fn()
-    } catch (err) {
-      lastError = err
-      if (attempt === attempts - 1) break
-      const delay = BASE_RETRY_DELAY_MS * 2 ** attempt
-      await sleep(delay)
-    }
-  }
-  throw lastError
-}
-
-export async function scoreCandidateWithGroq(
+export async function scoreCandidateWithGemini(
   candidateProfile: CandidateProfile,
   requiredSkills: string[]
 ): Promise<CandidateScore> {
@@ -149,61 +73,20 @@ export async function scoreCandidateWithGroq(
     throw new Error('requiredSkills must be a non-empty array of strings')
   }
 
-  const systemPrompt = `You are an expert recruiter scoring candidates against required skills. Return exactly one valid JSON object and nothing else.
-The JSON must contain these keys:
-- "score": integer between 0 and 100
-- "status": "Shortlisted", "Manual Review", or "Rejected"
-- "reason": a short objective sentence explaining the score
-- "missing_skills": array of missing required skill strings
+  // Call Gemini scoring helper which returns match_score and ai_summary
+  const role = String(candidateProfile.role || '')
+  const geminiResp = await evaluateCandidateWithGemini(candidateProfile, role)
 
-Use the following score thresholds:
-- 80 or above => Shortlisted
-- 50 to 79 => Manual Review
-- Below 50 => Rejected
+  const score = normalizeScore(geminiResp.match_score)
+  const reason = String(geminiResp.ai_summary || '')
 
-If a value is unknown, return an empty string or empty array. No markdown, no extra keys, no explanation.`
+  const profileSkills = normalizeStringArray(candidateProfile.skills)
+  const lowerSkills = profileSkills.map((s) => s.toLowerCase())
+  const missing_skills = requiredSkills
+    .map((s) => s.trim())
+    .filter((rs) => rs.length > 0 && !lowerSkills.includes(rs.toLowerCase()))
 
-  const userPrompt = `Job roles examples:
-- Node.js Developer: Node.js, MongoDB, Express, REST API, Git
-- Frontend Developer: React, Next.js, JavaScript, Tailwind CSS
-
-Candidate Profile:
-${JSON.stringify(candidateProfile, null, 2)}
-
-Required Skills:
-${requiredSkills.join(', ')}
-
-Evaluate the candidate's fit for the required skills and return only the JSON object described above.`
-
-  const message = await retry(async () => {
-    return await runWithTimeout(
-      ((getGroqClient() as any).messages.create)({
-        model: GROQ_MODEL,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt },
-        ],
-        max_tokens: 256,
-        temperature: 0.0,
-      }),
-      DEFAULT_TIMEOUT_MS
-    )
-  }, MAX_RETRIES)
-
-  const raw = extractRawText(message)
-  const jsonText = extractJson(raw)
-
-  let parsed: any
-  try {
-    parsed = JSON.parse(jsonText)
-  } catch (err) {
-    throw new Error(`Invalid JSON from Groq scoring response: ${raw}`)
-  }
-
-  const score = normalizeScore(parsed.score)
-  const status = normalizeStatus(parsed.status, score)
-  const reason = normalizeReason(parsed.reason)
-  const missing_skills = normalizeStringArray(parsed.missing_skills)
+  const status = normalizeStatus(null, score)
 
   return { score, status, reason, missing_skills }
 }

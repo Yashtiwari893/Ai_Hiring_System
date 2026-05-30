@@ -1,10 +1,11 @@
 import { NextRequest } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
-import { evaluateCandidateWithGemini } from '../../../lib/ai/gemini'
 import { analyzeResumeWithMistral } from '../../../lib/ai/mistral'
 import { sendEmail } from '../../../lib/email/send'
 import { appendCandidateRow } from '../../../lib/googleSheets'
-import Groq from 'groq-sdk'
+// Replaced Groq with Gemini-based parsing/scoring
+import { analyzeResume } from '../../../lib/ai/resumeAnalysis'
+import { evaluateCandidateWithGemini } from '../../../lib/ai/gemini'
 
 type RequestBody = {
   name: string
@@ -63,11 +64,7 @@ async function extractTextFromPdf(buf: Buffer): Promise<string> {
   return data.text || ''
 }
 
-function getGroqClient() {
-  const apiKey = process.env.GROQ_API_KEY
-  if (!apiKey) throw new Error('GROQ_API_KEY is not configured')
-  return new Groq({ apiKey })
-}
+// Groq removed — using Gemini via lib/ai/resumeAnalysis.ts and lib/ai/gemini.ts
 
 function getSupabase() {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
@@ -168,57 +165,33 @@ export async function POST(req: NextRequest) {
       return new Response(JSON.stringify({ error: 'Failed to extract PDF text' }), { status: 500 })
     }
 
-    // Step 3: Parse resume with Groq
-    const systemPrompt = `You are a strict JSON generator. Given a resume text, output ONLY one valid JSON object with these exact keys:
-- "skills": array of strings
-- "experience_years": number
-- "education": array of strings
-- "certifications": array of strings
-- "top_projects": array of strings
-- "role_relevance": concise string summary of candidate fit for the applied role
-- "fake_resume_risk": one of "low", "medium", "high"
-- "summary": brief two-sentence candidate summary
-If a value is unknown, return empty array, empty string, or 0. No markdown, no explanation, no extra keys.`
-
+    // Step 3: Parse resume with Gemini (using analyzeResume)
     // Trim resume text to avoid token limit issues
     const trimmedResumeText = resumeText.slice(0, 6000)
 
-    let message: any
-    try {
-      const groqModel = process.env.GROQ_MODEL || 'llama3-8b'
-      console.log(`Using Groq model for resume parsing: ${groqModel}`)
-      message = await runWithTimeout(
-        getGroqClient().chat.completions.create({
-          model: groqModel,
-          messages: [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: `Resume:\n\n${trimmedResumeText}` },
-          ],
-          max_tokens: 1024,
-          temperature: 0.0,
-        }),
-        LLM_TIMEOUT_MS,
-        'Groq Parsing'
-      )
-    } catch (err: any) {
-      console.error('Groq error:', err?.message || err)
-      await getSupabase().from('candidates').update({ status: 'Pending', error_step: 'Groq Parsing', error_message: String(err?.message || err) }).eq('id', candidateId)
-      return new Response(JSON.stringify({ error: 'Failed at Groq Parsing' }), { status: 500 })
-    }
-
-    const rawGroq = message?.choices?.[0]?.message?.content || ''
-    console.log('Groq raw response:', rawGroq.slice(0, 300))
-
     let parsed: any = null
     try {
-      const clean = rawGroq.replace(/```json|```/g, '').trim()
-      const jsonStart = clean.indexOf('{')
-      const jsonEnd = clean.lastIndexOf('}')
-      const jsonText = jsonStart !== -1 && jsonEnd !== -1 ? clean.substring(jsonStart, jsonEnd + 1) : clean
-      parsed = JSON.parse(jsonText)
+      const analysis = await runWithTimeout(analyzeResume(trimmedResumeText), LLM_TIMEOUT_MS, 'Gemini Resume Analysis')
+      // Map analyzeResume output to the expected parsed schema
+      // analyzeResume returns: { skills, experience, education, projects, certifications, summary }
+      const experienceYearsRaw = String(analysis.experience || '')
+      const yearsMatch = experienceYearsRaw.match(/(\d+(?:\.\d+)?)/)
+      const experience_years = yearsMatch ? Number(yearsMatch[1]) : 0
+
+      parsed = {
+        skills: Array.isArray(analysis.skills) ? analysis.skills : [],
+        experience_years,
+        education: Array.isArray(analysis.education) ? analysis.education : (analysis.education ? [analysis.education] : []),
+        certifications: Array.isArray(analysis.certifications) ? analysis.certifications : [],
+        top_projects: Array.isArray(analysis.projects) ? analysis.projects : [],
+        role_relevance: analysis.summary || '',
+        fake_resume_risk: 'low',
+        summary: analysis.summary || '',
+      }
     } catch (err: any) {
-      await getSupabase().from('candidates').update({ status: 'Pending', error_step: 'Groq JSON Parse', error_message: String(err?.message || err), ai_summary: rawGroq }).eq('id', candidateId)
-      return new Response(JSON.stringify({ error: 'Failed to parse Groq JSON response' }), { status: 500 })
+      console.error('Gemini resume analysis error:', err?.message || err)
+      await getSupabase().from('candidates').update({ status: 'Pending', error_step: 'Resume Analysis', error_message: String(err?.message || err) }).eq('id', candidateId)
+      return new Response(JSON.stringify({ error: 'Failed to analyze resume' }), { status: 500 })
     }
 
     // Step 4: Score with Gemini
